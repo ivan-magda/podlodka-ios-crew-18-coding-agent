@@ -6,6 +6,8 @@ public final class Agent {
 
   private let client: OpenAI
   private let model: String
+  private let workingDirectory: String
+  private let allowsSubagents: Bool
   private let bash: Bash
   private let fileTools: FileTools
   private let todo = Todo()
@@ -14,10 +16,13 @@ public final class Agent {
   public init(
     client: OpenAI,
     model: String,
-    workingDirectory: String
+    workingDirectory: String,
+    allowsSubagents: Bool = true
   ) {
     self.client = client
     self.model = model
+    self.workingDirectory = workingDirectory
+    self.allowsSubagents = allowsSubagents
     self.bash = Bash(workingDirectory: workingDirectory)
     self.fileTools = FileTools(workingDirectory: workingDirectory)
     self.messages = [
@@ -33,7 +38,7 @@ public final class Agent {
       let result = try await client.chats(query: ChatQuery(
         messages: messages,
         model: model,
-        tools: [Bash.definition] + FileTools.definitions + [Todo.definition]
+        tools: availableTools
       ))
 
       let response = result.choices[0].message
@@ -82,6 +87,16 @@ public final class Agent {
     }
   }
 
+  private var availableTools: [ChatQuery.ChatCompletionToolParam] {
+    var tools = [Bash.definition] + FileTools.definitions + [Todo.definition]
+
+    if allowsSubagents {
+      tools.append(SubagentTool.definition)
+    }
+
+    return tools
+  }
+
   private func executeTool(
     _ toolCall: ChatQuery.ChatCompletionMessageParam.AssistantMessageParam.ToolCallParam
   ) async -> String {
@@ -90,14 +105,17 @@ public final class Agent {
       "read_file": fileTools.readFile,
       "write_file": fileTools.writeFile,
       "edit_file": fileTools.editFile,
-      "todo": todo.execute
+      "todo": todo.execute,
+      "subagent": executeSubagent
     ]
 
     let name = toolCall.function.name
     print("→ \(name)")
 
     let output: String
-    if let handler = handlers[name] {
+    if name == "subagent", !allowsSubagents {
+      output = "Error: A subagent cannot start another subagent"
+    } else if let handler = handlers[name] {
       do {
         output = try await handler(toolCall.function.arguments)
       } catch {
@@ -114,6 +132,21 @@ public final class Agent {
     }
 
     return output
+  }
+
+  private func executeSubagent(_ arguments: String) async throws -> String {
+    let task = try SubagentTool.task(from: arguments)
+    let subagent = Agent(
+      client: client,
+      model: model,
+      workingDirectory: workingDirectory,
+      allowsSubagents: false
+    )
+
+    print("── subagent ──")
+    defer { print("── main agent ──") }
+
+    return SubagentTool.format(try await subagent.run(task))
   }
 
   private func printToolOutput(_ output: String) {

@@ -1,10 +1,12 @@
-import Foundation
 import OpenAI
 
 public final class Agent {
+  private static let toolOutputPreviewLength = 200
+
   private let client: OpenAI
   private let model: String
   private let bash: Bash
+  private let fileTools: FileTools
   private var messages: [ChatQuery.ChatCompletionMessageParam]
 
   public init(
@@ -14,7 +16,8 @@ public final class Agent {
   ) {
     self.client = client
     self.model = model
-    self.bash = Bash(workingDirectory: URL(fileURLWithPath: workingDirectory))
+    self.bash = Bash(workingDirectory: workingDirectory)
+    self.fileTools = FileTools(workingDirectory: workingDirectory)
     self.messages = [
       .system(.init(content: .textContent(Self.systemPrompt(workingDirectory))))
     ]
@@ -27,7 +30,7 @@ public final class Agent {
       let result = try await client.chats(query: ChatQuery(
         messages: messages,
         model: model,
-        tools: [Self.bashTool]
+        tools: [Bash.definition] + FileTools.definitions
       ))
 
       let response = result.choices[0].message
@@ -48,7 +51,7 @@ public final class Agent {
       }
 
       for toolCall in toolCalls {
-        let output = try await executeTool(toolCall)
+        let output = await executeTool(toolCall)
         messages.append(.tool(.init(
           content: .textContent(output),
           toolCallId: toolCall.id
@@ -59,49 +62,49 @@ public final class Agent {
 
   private func executeTool(
     _ toolCall: ChatQuery.ChatCompletionMessageParam.AssistantMessageParam.ToolCallParam
-  ) async throws -> String {
-    precondition(toolCall.function.name == "bash")
+  ) async -> String {
+    let handlers: [String: (String) async throws -> String] = [
+      "bash": bash.execute,
+      "read_file": fileTools.readFile,
+      "write_file": fileTools.writeFile,
+      "edit_file": fileTools.editFile
+    ]
 
-    let input = try JSONDecoder().decode(
-      BashInput.self,
-      from: Data(toolCall.function.arguments.utf8)
-    )
+    let name = toolCall.function.name
+    print("→ \(name)")
 
-    print("$ \(input.command)")
+    let output: String
+    if let handler = handlers[name] {
+      do {
+        output = try await handler(toolCall.function.arguments)
+      } catch {
+        output = "Error: \(error.localizedDescription)"
+      }
+    } else {
+      output = "Error: Unknown tool: \(name)"
+    }
 
-    let output = try await bash.run(input.command)
-    print(output)
+    printToolOutput(output)
 
     return output
+  }
+
+  private func printToolOutput(_ output: String) {
+    let preview = String(output.prefix(Self.toolOutputPreviewLength))
+    print(preview)
+
+    if preview.count < output.count {
+      print("… output truncated")
+    }
   }
 
   private static func systemPrompt(_ workingDirectory: String) -> String {
     """
     You are a coding agent working in \(workingDirectory).
-    Use Bash to inspect and modify the project, run commands, and complete the user's task.
-    Check each command result before deciding what to do next.
+    Use tools to complete the user's task.
+    Prefer read_file, write_file, and edit_file over bash for file operations.
+    Use bash to run commands.
+    Check each tool result before proceeding.
     """
   }
-
-  private static let bashTool = ChatQuery.ChatCompletionToolParam(
-    function: .init(
-      name: "bash",
-      description: "Run a Bash command and return its output and exit code.",
-      parameters: .init(
-        .type(.object),
-        .properties([
-          "command": .init(
-            .type(.string),
-            .description("The Bash command to run.")
-          )
-        ]),
-        .required(["command"]),
-        .additionalProperties(.boolean(false))
-      )
-    )
-  )
-}
-
-private struct BashInput: Decodable {
-  let command: String
 }

@@ -1,15 +1,27 @@
 import Foundation
+import OpenAI
 
 struct Bash: Sendable {
-  let workingDirectory: URL
+  private let workingDirectory: URL
 
-  func run(_ command: String) async throws -> String {
+  init(workingDirectory: String) {
+    self.workingDirectory = URL(fileURLWithPath: workingDirectory)
+  }
+
+  func execute(_ arguments: String) async throws -> String {
+    let input = try JSONDecoder().decode(
+      BashInput.self,
+      from: Data(arguments.utf8)
+    )
+
+    print("$ \(input.command)")
+
     let process = Process()
     let stdout = Pipe()
     let stderr = Pipe()
 
     process.executableURL = URL(fileURLWithPath: "/bin/bash")
-    process.arguments = ["-c", command]
+    process.arguments = ["-c", input.command]
     process.currentDirectoryURL = workingDirectory
     process.standardOutput = stdout
     process.standardError = stderr
@@ -34,4 +46,26 @@ struct Bash: Sendable {
     .filter { !$0.isEmpty }
     .joined(separator: "\n")
   }
+
+  static let definition = ChatQuery.ChatCompletionToolParam(
+    function: .init(
+      name: "bash",
+      description: "Run a Bash command and return its output and exit code.",
+      parameters: .init(
+        .type(.object),
+        .properties([
+          "command": .init(
+            .type(.string),
+            .description("The Bash command to run.")
+          )
+        ]),
+        .required(["command"]),
+        .additionalProperties(.boolean(false))
+      )
+    )
+  )
+}
+
+private struct BashInput: Decodable {
+  let command: String
 }

@@ -1,3 +1,4 @@
+import Foundation
 import OpenAI
 
 public final class Agent {
@@ -5,6 +6,7 @@ public final class Agent {
   private static let todoReminderThreshold = 3
   private static let recentToolResultsToKeep = 5
   private static let maximumOldToolResultCharacters = 2_000
+  private static let maximumContextCharacters = 100_000
 
   private let client: OpenAI
   private let model: String
@@ -37,6 +39,8 @@ public final class Agent {
     var turnsWithoutTodo = 0
 
     while true {
+      await autoCompactIfNeeded()
+
       let result = try await client.chats(query: ChatQuery(
         messages: messages,
         model: model,
@@ -179,6 +183,55 @@ public final class Agent {
 
     if compactedResults > 0 {
       print("Context compacted: \(compactedResults) old tool results")
+    }
+  }
+
+  private func autoCompactIfNeeded() async {
+    do {
+      let transcript = String(
+        decoding: try JSONEncoder().encode(messages),
+        as: UTF8.self
+      )
+
+      guard transcript.count > Self.maximumContextCharacters else {
+        return
+      }
+
+      let prompt = """
+      Summarize this coding-agent conversation so work can continue without the original messages.
+      Preserve the user's request and constraints, completed work, current state, important file paths and decisions, \
+      tool results and checks, unresolved errors, relevant loaded skills, and next steps.
+      Return only the summary.
+
+      \(transcript)
+      """
+
+      let result = try await client.chats(query: ChatQuery(
+        messages: [.user(.init(content: .string(prompt)))],
+        model: model
+      ))
+      let summary = result.choices[0].message.content ?? ""
+
+      guard !summary.isEmpty else {
+        return
+      }
+
+      messages = [
+        messages[0],
+        .user(.init(content: .string("""
+        Previous conversation summary:
+        \(summary)
+
+        Current todo:
+        \(todo.render())
+
+        Continue the task from this state.
+        """)))
+      ]
+
+      print("Context auto-compacted")
+    } catch {
+      print("Auto-compaction failed: \(error.localizedDescription)")
     }
   }
 

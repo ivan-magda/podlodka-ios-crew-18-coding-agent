@@ -14,6 +14,7 @@ public final class Agent {
   private let allowsSubagents: Bool
   private let bash: Bash
   private let fileTools: FileTools
+  private let skills: Skills
   private let todo = Todo()
   private var messages: [ChatQuery.ChatCompletionMessageParam]
 
@@ -23,14 +24,19 @@ public final class Agent {
     workingDirectory: String,
     allowsSubagents: Bool = true
   ) {
+    let skills = Skills(workingDirectory: workingDirectory)
+
     self.client = client
     self.model = model
     self.workingDirectory = workingDirectory
     self.allowsSubagents = allowsSubagents
     self.bash = Bash(workingDirectory: workingDirectory)
     self.fileTools = FileTools(workingDirectory: workingDirectory)
+    self.skills = skills
     self.messages = [
-      .system(.init(content: .textContent(Self.systemPrompt(workingDirectory))))
+      .system(.init(content: .textContent(
+        Self.systemPrompt(workingDirectory) + skills.prompt
+      )))
     ]
   }
 
@@ -95,7 +101,10 @@ public final class Agent {
   }
 
   private var availableTools: [ChatQuery.ChatCompletionToolParam] {
-    var tools = [Bash.definition] + FileTools.definitions + [Todo.definition]
+    var tools = [Bash.definition]
+      + FileTools.definitions
+      + [Todo.definition]
+      + skills.toolDefinitions
 
     if allowsSubagents {
       tools.append(SubagentTool.definition)
@@ -113,6 +122,7 @@ public final class Agent {
       "write_file": fileTools.writeFile,
       "edit_file": fileTools.editFile,
       "todo": todo.execute,
+      "load_skill": skills.load,
       "subagent": executeSubagent
     ]
 

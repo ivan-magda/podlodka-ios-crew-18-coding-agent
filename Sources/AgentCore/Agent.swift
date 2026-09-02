@@ -2,11 +2,13 @@ import OpenAI
 
 public final class Agent {
   private static let toolOutputPreviewLength = 200
+  private static let todoReminderThreshold = 3
 
   private let client: OpenAI
   private let model: String
   private let bash: Bash
   private let fileTools: FileTools
+  private let todo = Todo()
   private var messages: [ChatQuery.ChatCompletionMessageParam]
 
   public init(
@@ -25,12 +27,13 @@ public final class Agent {
 
   public func run(_ prompt: String) async throws -> String {
     messages.append(.user(.init(content: .string(prompt))))
+    var turnsWithoutTodo = 0
 
     while true {
       let result = try await client.chats(query: ChatQuery(
         messages: messages,
         model: model,
-        tools: [Bash.definition] + FileTools.definitions
+        tools: [Bash.definition] + FileTools.definitions + [Todo.definition]
       ))
 
       let response = result.choices[0].message
@@ -50,12 +53,31 @@ public final class Agent {
         return response.content ?? ""
       }
 
+      var didUseTodo = false
+
       for toolCall in toolCalls {
         let output = await executeTool(toolCall)
         messages.append(.tool(.init(
           content: .textContent(output),
           toolCallId: toolCall.id
         )))
+
+        if toolCall.function.name == "todo" {
+          didUseTodo = true
+        }
+      }
+
+      turnsWithoutTodo = didUseTodo ? 0 : turnsWithoutTodo + 1
+
+      if turnsWithoutTodo >= Self.todoReminderThreshold, todo.hasOpenItems {
+        let reminder = """
+        Current todo:
+        \(todo.render())
+
+        Update your todo list.
+        """
+        print(reminder)
+        messages.append(.user(.init(content: .string(reminder))))
       }
     }
   }
@@ -67,7 +89,8 @@ public final class Agent {
       "bash": bash.execute,
       "read_file": fileTools.readFile,
       "write_file": fileTools.writeFile,
-      "edit_file": fileTools.editFile
+      "edit_file": fileTools.editFile,
+      "todo": todo.execute
     ]
 
     let name = toolCall.function.name
@@ -84,7 +107,11 @@ public final class Agent {
       output = "Error: Unknown tool: \(name)"
     }
 
-    printToolOutput(output)
+    if name == "todo" {
+      print(output)
+    } else {
+      printToolOutput(output)
+    }
 
     return output
   }
@@ -104,6 +131,7 @@ public final class Agent {
     Use tools to complete the user's task.
     Prefer read_file, write_file, and edit_file over bash for file operations.
     Use bash to run commands.
+    Use todo for multi-step tasks and keep it current as you work.
     Check each tool result before proceeding.
     """
   }

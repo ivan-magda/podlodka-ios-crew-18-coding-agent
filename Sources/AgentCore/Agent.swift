@@ -12,6 +12,7 @@ public final class Agent {
   private let model: String
   private let workingDirectory: String
   private let allowsSubagents: Bool
+  private let verification: Verification?
   private let bash: Bash
   private let fileTools: FileTools
   private let skills: Skills
@@ -22,7 +23,8 @@ public final class Agent {
     client: OpenAI,
     model: String,
     workingDirectory: String,
-    allowsSubagents: Bool = true
+    allowsSubagents: Bool = true,
+    verifiesCompletion: Bool = true
   ) {
     let skills = Skills(workingDirectory: workingDirectory)
 
@@ -30,6 +32,9 @@ public final class Agent {
     self.model = model
     self.workingDirectory = workingDirectory
     self.allowsSubagents = allowsSubagents
+    self.verification = verifiesCompletion
+      ? Verification(workingDirectory: workingDirectory)
+      : nil
     self.bash = Bash(workingDirectory: workingDirectory)
     self.fileTools = FileTools(workingDirectory: workingDirectory)
     self.skills = skills
@@ -63,12 +68,32 @@ public final class Agent {
       )))
       compactOldToolResults()
 
-      if let text = response.content, !text.isEmpty {
+      if !toolCalls.isEmpty, let text = response.content, !text.isEmpty {
         print(text)
       }
 
       guard !toolCalls.isEmpty else {
-        return response.content ?? ""
+        if let failure = try await verification?.failure() {
+          print("Verification failed")
+          printToolOutput(failure)
+
+          let feedback = """
+          Required project verification failed:
+
+          \(failure)
+
+          Fix the problem and try to finish again.
+          """
+          messages.append(.user(.init(content: .string(feedback))))
+          continue
+        }
+
+        let text = response.content ?? ""
+        if !text.isEmpty {
+          print(text)
+        }
+
+        return text
       }
 
       var didUseTodo = false
@@ -157,7 +182,8 @@ public final class Agent {
       client: client,
       model: model,
       workingDirectory: workingDirectory,
-      allowsSubagents: false
+      allowsSubagents: false,
+      verifiesCompletion: false
     )
 
     print("── subagent ──")

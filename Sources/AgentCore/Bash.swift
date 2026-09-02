@@ -14,14 +14,18 @@ struct Bash: Sendable {
       from: Data(arguments.utf8)
     )
 
-    print("$ \(input.command)")
+    return try await run(input.command).output
+  }
+
+  func run(_ command: String) async throws -> (output: String, exitCode: Int32) {
+    print("$ \(command)")
 
     let process = Process()
     let stdout = Pipe()
     let stderr = Pipe()
 
     process.executableURL = URL(fileURLWithPath: "/bin/bash")
-    process.arguments = ["-c", input.command]
+    process.arguments = ["-c", command]
     process.currentDirectoryURL = workingDirectory
     process.standardOutput = stdout
     process.standardError = stderr
@@ -38,13 +42,15 @@ struct Bash: Sendable {
 
     process.waitUntilExit()
 
-    return [
+    let output = [
       String(decoding: capturedStdout, as: UTF8.self),
       String(decoding: capturedStderr, as: UTF8.self),
       "Exit code: \(process.terminationStatus)"
     ]
     .filter { !$0.isEmpty }
     .joined(separator: "\n")
+
+    return (output, process.terminationStatus)
   }
 
   static let definition = ChatQuery.ChatCompletionToolParam(

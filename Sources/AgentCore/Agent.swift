@@ -3,6 +3,8 @@ import OpenAI
 public final class Agent {
   private static let toolOutputPreviewLength = 200
   private static let todoReminderThreshold = 3
+  private static let recentToolResultsToKeep = 5
+  private static let maximumOldToolResultCharacters = 2_000
 
   private let client: OpenAI
   private let model: String
@@ -49,6 +51,7 @@ public final class Agent {
         reasoningContent: response.reasoning,
         toolCalls: toolCalls
       )))
+      compactOldToolResults()
 
       if let text = response.content, !text.isEmpty {
         print(text)
@@ -147,6 +150,36 @@ public final class Agent {
     defer { print("── main agent ──") }
 
     return SubagentTool.format(try await subagent.run(task))
+  }
+
+  private func compactOldToolResults() {
+    let toolMessageIndices = messages.indices.filter {
+      messages[$0].role == .tool
+    }
+
+    var compactedResults = 0
+
+    for index in toolMessageIndices.dropLast(Self.recentToolResultsToKeep) {
+      guard
+        case .tool(let toolMessage) = messages[index],
+        case .textContent(let output) = toolMessage.content,
+        output.count > Self.maximumOldToolResultCharacters
+      else {
+        continue
+      }
+
+      messages[index] = .tool(.init(
+        content: .textContent(
+          "[Old tool result removed from active context. Inspect the source again if needed.]"
+        ),
+        toolCallId: toolMessage.toolCallId
+      ))
+      compactedResults += 1
+    }
+
+    if compactedResults > 0 {
+      print("Context compacted: \(compactedResults) old tool results")
+    }
   }
 
   private func printToolOutput(_ output: String) {

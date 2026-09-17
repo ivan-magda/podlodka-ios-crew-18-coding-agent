@@ -2,3 +2,9 @@
 .swiftpm/
 .env
 .DS_Store
+
+# Generated experiment artifacts (synthetic fixture logs are tracked).
+/experiments/planning/tic-tac-toe/app/
+/experiments/context/auto-compact/report.md
+__pycache__/
+*.pyc
